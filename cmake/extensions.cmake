@@ -1867,6 +1867,8 @@ endfunction()
 #                          Issue an error for any relative path not specified
 #                          by user with `-D<path>`
 #
+# returns an updated list of absolute paths
+#
 # CONF_FILES <path>: Find all configuration files in path and return them in a
 #                    list. Configuration files will be:
 #                    - DTS:       Overlay files (.overlay)
@@ -1888,23 +1890,42 @@ endfunction()
 #                                  BUILD debug, will look for <board>_debug.conf
 #                                  and <board>_debug.overlay, instead of <board>.conf
 #
-# returns an updated list of absolute paths
+# FILENAMES <list>: Construct a filename based on the provided BOARD, REVISION, and BUILD type.
+#                   FILENAME takes the following additional arguments:
+#                   BOARD <board>:             Board name to use when constructing FILENAMES list.
+#                   BOARD_REVISION <revision>: Board revision to use when constructing FILENAMES list.
+#                   BUILD <type>:               Build type to use when construction FILENAMES list.
+#
+# Examples
+# calling
+#   zephyr_file(FILENAMES list BOARD alpha BUILD debug)
+# will return the string `alpha_debug` in the `list` parameter.
+#
+# calling
+#   zephyr_file(FILENAMES file_list BOARD alpha REVISION 1.0.0 BUILD debug)
+# will return the strings `alpha_debug;alpha_1_0_0_debug` in the `list` parameter.
+#
 function(zephyr_file)
-  set(file_options APPLICATION_ROOT CONF_FILES)
+  set(file_options APPLICATION_ROOT CONF_FILES FILENAMES)
   if((ARGC EQUAL 0) OR (NOT (ARGV0 IN_LIST file_options)))
     message(FATAL_ERROR "No <mode> given to `zephyr_file(<mode> <args>...)` function,\n \
-Please provide one of following: APPLICATION_ROOT, CONF_FILES")
+Please provide one of following: APPLICATION_ROOT, CONF_FILES, FILENAMES")
   endif()
 
   if(${ARGV0} STREQUAL APPLICATION_ROOT)
     set(single_args APPLICATION_ROOT)
   elseif(${ARGV0} STREQUAL CONF_FILES)
     set(single_args CONF_FILES BOARD BOARD_REVISION DTS KCONF BUILD)
+  elseif(${ARGV0} STREQUAL FILENAMES)
+    set(single_args FILENAMES BOARD BOARD_REVISION BUILD)
+    # zephyr_file(FILENAMES ...) is used recursively from inside CONF_FILES so clear that
+    # variable in the local recursive call scope.
+    set(FILE_CONF_FILES)
   endif()
 
   cmake_parse_arguments(FILE "" "${single_args}" "" ${ARGN})
   if(FILE_UNPARSED_ARGUMENTS)
-      message(FATAL_ERROR "zephyr_file(${ARGV0} <path> ...) given unknown arguments: ${FILE_UNPARSED_ARGUMENTS}")
+      message(FATAL_ERROR "zephyr_file(${ARGV0} <val> ...) given unknown arguments: ${FILE_UNPARSED_ARGUMENTS}")
   endif()
 
 
@@ -1959,15 +1980,14 @@ Relative paths are only allowed with `-D${ARGV1}=<path>`")
       endif()
     endif()
 
-    set(FILENAMES ${FILE_BOARD})
-
-    if(DEFINED FILE_BOARD_REVISION)
-      string(REPLACE "." "_" revision_string ${FILE_BOARD_REVISION})
-      list(APPEND FILENAMES "${FILE_BOARD}_${revision_string}")
-    endif()
+    zephyr_file(FILENAMES filename_list
+                BOARD ${FILE_BOARD}
+                BOARD_REVISION ${FILE_BOARD_REVISION}
+                BUILD ${FILE_BUILD}
+    )
 
     if(FILE_DTS)
-      foreach(filename ${FILENAMES})
+      foreach(filename ${filename_list})
         if(EXISTS ${FILE_CONF_FILES}/${filename}.overlay)
           list(APPEND ${FILE_DTS} ${FILE_CONF_FILES}/${filename}.overlay)
         endif()
@@ -1978,11 +1998,7 @@ Relative paths are only allowed with `-D${ARGV1}=<path>`")
     endif()
 
     if(FILE_KCONF)
-      foreach(filename ${FILENAMES})
-        if(FILE_BUILD)
-          set(filename "${filename}_${FILE_BUILD}")
-        endif()
-
+      foreach(filename ${filename_list})
         if(EXISTS ${FILE_CONF_FILES}/${filename}.conf)
           list(APPEND ${FILE_KCONF} ${FILE_CONF_FILES}/${filename}.conf)
         endif()
@@ -1991,6 +2007,30 @@ Relative paths are only allowed with `-D${ARGV1}=<path>`")
       # This updates the provided list in parent scope (callers scope)
       set(${FILE_KCONF} ${${FILE_KCONF}} PARENT_SCOPE)
     endif()
+  endif()
+
+  if(FILE_FILENAMES)
+    if(DEFINED FILE_BOARD_REVISION AND NOT FILE_BOARD)
+        message(FATAL_ERROR
+          "zephyr_file(${ARGV0} <list> BOARD_REVISION ${FILE_BOARD_REVISION} ...)"
+          " given without BOARD argument, please specify BOARD"
+        )
+    endif()
+
+    set(filenames ${FILE_BOARD})
+
+    if(DEFINED FILE_BOARD_REVISION)
+      string(REPLACE "." "_" revision_string ${FILE_BOARD_REVISION})
+      list(APPEND filenames "${FILE_BOARD}_${revision_string}")
+    endif()
+
+    if(FILE_BUILD)
+      list(TRANSFORM filenames APPEND "_${FILE_BUILD}")
+      list(APPEND filenames "${FILE_BUILD}")
+    endif()
+
+    # This updates the provided list in parent scope (callers scope)
+    set(${FILE_FILENAMES} ${filenames} PARENT_SCOPE)
   endif()
 endfunction()
 
